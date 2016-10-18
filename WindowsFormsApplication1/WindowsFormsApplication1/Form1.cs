@@ -201,18 +201,18 @@ namespace WindowsFormsApplication1
                 {
                     if ((numBytes = mySocket.Send(bSendData,
                           bSendData.Length, 0)) == -1)
-                        Console.WriteLine("Socket Error cannot Send Packet");
+                        log("Socket Error cannot Send Packet");
                     else
                     {
-                        Console.WriteLine("No. of bytes send {0}", numBytes);
+                        log("No. of bytes send" + numBytes);
                     }
                 }
                 else
-                    Console.WriteLine("Connection Dropped....");
+                    log("Connection Dropped....");
             }
             catch (Exception e)
             {
-                Console.WriteLine("Error Occurred : {0} ", e);
+                log("Error Occurred: " + e.ToString());
             }
         }
 
@@ -271,20 +271,27 @@ namespace WindowsFormsApplication1
             //make a byte array and receive data from the client 
                     Byte[] bReceive = new Byte[1024];
                     int i = mySocket.Receive(bReceive, bReceive.Length, 0);
-
-
+                    int headlength;
+                            
                     //Convert Byte to String
                     string sBuffer = Encoding.ASCII.GetString(bReceive);
 
-
                     //At present we will only deal with GET type
-                    if (sBuffer.Substring(0, 3) != "GET")
+                    if (sBuffer.Substring(0, 3) != "GET" && sBuffer.Substring(0, 4) != "POST")
                     {
-                        log("Only Get Method is supported..");
+                        log("Only Get and Post Method is supported..");
                         mySocket.Close();
                         return;
                     }
 
+                    log(sBuffer);
+
+                    if (sBuffer.Substring(0, 4) == "POST")
+                    {
+                        log("\nGOT A POST\n");
+                        headlength = 4;
+                    }
+                    else headlength = 3;
 
                     // Look for HTTP request
                     iStartPos = sBuffer.IndexOf("HTTP", 1);
@@ -292,11 +299,12 @@ namespace WindowsFormsApplication1
 
                     // Get the HTTP text and version e.g. it will return "HTTP/1.1"
                     string sHttpVersion = sBuffer.Substring(iStartPos, 8);
+                    log("Got HTTPVersion: " + sHttpVersion);
 
 
                     // Extract the Requested Type and Requested file/directory
                     sRequest = sBuffer.Substring(0, iStartPos - 1);
-
+                    log("Got Request Type: " + sRequest);
 
                     //Replace backslash with Forward Slash, if Any
                     sRequest.Replace("\\", "/");
@@ -312,11 +320,11 @@ namespace WindowsFormsApplication1
                     //Extract the requested file name
                     iStartPos = sRequest.LastIndexOf("/") + 1;
                     sRequestedFile = sRequest.Substring(iStartPos);
-
+                    log("Requested File: " + sRequestedFile);
 
                     //Extract The directory Name
-                    sDirName = sRequest.Substring(sRequest.IndexOf("/"),
-                               sRequest.LastIndexOf("/") - 3);
+                    sDirName = sRequest.Substring(sRequest.IndexOf("/"), sRequest.LastIndexOf("/") - headlength);
+                    log("Directory Name: " + sDirName);
 
                     /////////////////////////////////////////////////////////////////////
                     // Identify the Physical Directory
@@ -328,7 +336,6 @@ namespace WindowsFormsApplication1
                         //Get the Virtual Directory
                         sLocalDir = GetLocalPath(sMyWebServerRoot, sDirName);
                     }
-
 
                     log("Directory Requested : " + sLocalDir);
 
