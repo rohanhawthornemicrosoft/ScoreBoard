@@ -204,7 +204,7 @@ namespace WindowsFormsApplication1
                         log("Socket Error cannot Send Packet");
                     else
                     {
-                        log("No. of bytes send" + numBytes);
+                        log("No. of bytes sent (Body): " + numBytes);
                     }
                 }
                 else
@@ -238,7 +238,7 @@ namespace WindowsFormsApplication1
 
             SendToBrowser(bSendData, ref mySocket);
 
-            Console.WriteLine("Total Bytes : " + iTotBytes.ToString());
+            log("Total Bytes Sent (header) : " + iTotBytes.ToString());
 
         }
 
@@ -272,6 +272,7 @@ namespace WindowsFormsApplication1
                     Byte[] bReceive = new Byte[1024];
                     int i = mySocket.Receive(bReceive, bReceive.Length, 0);
                     int headlength;
+                    Dictionary<string, string> postpairs = new Dictionary<string, string>();
                             
                     //Convert Byte to String
                     string sBuffer = Encoding.ASCII.GetString(bReceive);
@@ -290,6 +291,21 @@ namespace WindowsFormsApplication1
                     {
                         log("\nGOT A POST\n");
                         headlength = 4;
+
+                        // create dictionary of POST pairs
+                        int pair = sBuffer.IndexOf("=");
+                        int start = pair;
+                        if (pair > 0)
+                        {
+                            while (sBuffer[start] != '\n') start--;
+                            string[] pairs = sBuffer.Substring(start+1).Split('&');
+                            foreach (string pairfound in pairs)
+                            {
+                                string[] splits = pairfound.Split('=');
+                                postpairs.Add(splits[0], splits[1]);
+                            }
+                        }
+                        foreach (KeyValuePair<string, string> kvp in postpairs) log("got pair: " + kvp.Key + " = " + kvp.Value);      
                     }
                     else headlength = 3;
 
@@ -407,25 +423,37 @@ namespace WindowsFormsApplication1
 
                         sResponse = "";
 
+                        // open the file
                         FileStream fs = new FileStream(sPhysicalFilePath, FileMode.Open, FileAccess.Read, FileShare.Read);
-                        // Create a reader that can read bytes from the FileStream.
 
-
+                        // Create a reader that can read bytes from the FileStream
                         BinaryReader reader = new BinaryReader(fs);
+
                         byte[] bytes = new byte[fs.Length];
                         int read;
+
+                        // Read from the file and write the data to the network
                         while ((read = reader.Read(bytes, 0, bytes.Length)) != 0)
                         {
-                            // Read from the file and write the data to the network
-                            sResponse = sResponse + Encoding.ASCII.GetString(bytes, 0, read);
-                            iTotBytes = iTotBytes + read;
+                            sResponse += Encoding.ASCII.GetString(bytes, 0, read);
+                            iTotBytes += read;
                         }
                         reader.Close();
                         fs.Close();
 
+                        // parse the file if post
+                        if (headlength == 4)
+                        {
+                            string body = Encoding.ASCII.GetString(bytes, 0, bytes.Length);
+                            foreach (KeyValuePair<string, string> kvp in postpairs) if (kvp.Value.Length > 0) body = body.Replace("&" + kvp.Key, kvp.Value);
+                            byte[] newbytes = new byte[body.Length * sizeof(char)];
+                            System.Buffer.BlockCopy(body.ToCharArray(), 0, newbytes, 0, newbytes.Length);
+                            bytes = newbytes;
+                            iTotBytes = bytes.Length;
+                        }
+
                         SendHeader(sHttpVersion, sMimeType, iTotBytes, " 200 OK", ref mySocket);
                         SendToBrowser(bytes, ref mySocket);
-                        //mySocket.Send(bytes, bytes.Length,0);
 
                     }
                     mySocket.Close();
