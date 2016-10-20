@@ -16,11 +16,22 @@ namespace WindowsFormsApplication1
 {
     public partial class Form1 : Form
     {
-
         private TcpListener myListener;
         private IPAddress localaddr;
         private int port = 5050;  // Select any free port you wish
         Thread th;
+        string spreadsheetfile = "data\\Spreadsheet.Dat";
+        string passwordfile = "data\\Password.Dat";
+        int results = 0;
+        public const int blank = 0;
+        public const int good = 1;
+        public const int bad = 2;
+        int[] result = { blank, blank, blank };
+        public const int left = 0;
+        public const int head = 1;
+        public const int right = 2;
+        public const int post = 4;
+        public const int get = 3;
 
         delegate void SetTextCallback(string text);
 
@@ -237,9 +248,56 @@ namespace WindowsFormsApplication1
             Byte[] bSendData = Encoding.ASCII.GetBytes(sBuffer);
 
             SendToBrowser(bSendData, ref mySocket);
+        }
 
-            log("Total Bytes Sent (header) : " + iTotBytes.ToString());
+        Boolean parse_login(Dictionary<string, string> postpairs)
+        {
+            if (File.Exists(passwordfile))
+            {
+                string password = System.IO.File.ReadAllText(passwordfile);
+                log("testing entered password - " + postpairs["pass"] + " - against stored password - " + password);
+                if (postpairs["pass"].Equals(password)) return true; else return false;
+            }
+            log("Password not set");
+            return false;
+        }
 
+        string calculate_result(Dictionary<string, string> postpairs)
+        {
+            string position = "";
+            if (postpairs["good"].Length > 0)
+            {
+                position = postpairs["good"];
+                if (position.Equals("left")) result[left] = good;
+                if (position.Equals("head")) result[head] = good;
+                if (position.Equals("right")) result[right] = good;
+                results++;
+            }
+            if (postpairs["bad"].Length > 0)
+            {
+                position = postpairs["bad"];
+                if (position.Equals("left")) result[left] = bad;
+                if (position.Equals("head")) result[head] = bad;
+                if (position.Equals("right")) result[right] = bad;
+                results++;
+            }
+            return position + ".dpi";
+        }
+
+        Dictionary<string, string> show_results()
+        {
+            Dictionary<string, string> screen = new Dictionary<string, string>();
+            if (results == 3)
+            {
+                if (result[left] == good) screen.Add("left", "good"); else screen.Add("left", "bad");
+                if (result[head] == good) screen.Add("head", "good"); else screen.Add("head", "bad");
+                if (result[right] == good) screen.Add("right", "good"); else screen.Add("right", "bad");
+                return screen;
+            }
+            screen.Add("left", "blank");
+            screen.Add("head", "blank");
+            screen.Add("right", "blank");
+            return screen;
         }
 
         public void StartListen()
@@ -251,9 +309,8 @@ namespace WindowsFormsApplication1
             String sRequestedFile;
             String sErrorMessage;
             String sLocalDir;
-            String sMyWebServerRoot = "C:\\www\\";
+            String sMyWebServerRoot = "C:\\scoreboard\\";
             String sPhysicalFilePath = "";
-            String sFormattedMessage = "";
             String sResponse = "";
 
 
@@ -262,13 +319,10 @@ namespace WindowsFormsApplication1
                 //Accept a new connection
                 Socket mySocket = myListener.AcceptSocket();
 
-                log("Socket Type " + mySocket.SocketType);
                 if (mySocket.Connected)
                 {
-                    log("\nClient Connected!!\n==================\n"+mySocket.RemoteEndPoint) ;
 
-
-            //make a byte array and receive data from the client 
+                    //make a byte array and receive data from the client 
                     Byte[] bReceive = new Byte[1024];
                     int i = mySocket.Receive(bReceive, bReceive.Length, 0);
                     int headlength;
@@ -285,29 +339,24 @@ namespace WindowsFormsApplication1
                         return;
                     }
 
-                    log(sBuffer);
-
                     if (sBuffer.Substring(0, 4) == "POST")
                     {
                         log("\nGOT A POST\n");
-                        headlength = 4;
+                        headlength = post;
 
                         // create dictionary of POST pairs
-                        int pair = sBuffer.IndexOf("=");
-                        int start = pair;
-                        if (pair > 0)
+                        int start = sBuffer.Length - 1;
+                        while (sBuffer[start] != '\n') start--; start++;
+                        string[] pairs = sBuffer.Substring(start).Split('&');
+                        foreach (string pairfound in pairs)
                         {
-                            while (sBuffer[start] != '\n') start--;
-                            string[] pairs = sBuffer.Substring(start+1).Split('&');
-                            foreach (string pairfound in pairs)
-                            {
-                                string[] splits = pairfound.Split('=');
-                                postpairs.Add(splits[0], splits[1]);
-                            }
+                            string[] splits = pairfound.Split('=');
+                            postpairs.Add(splits[0], splits[1]);
                         }
-                        foreach (KeyValuePair<string, string> kvp in postpairs) log("got pair: " + kvp.Key + " = " + kvp.Value);      
+
+                        foreach (KeyValuePair<string, string> kvp in postpairs) log("got pair: " + kvp.Key + " = " + kvp.Value);     
                     }
-                    else headlength = 3;
+                    else headlength = get;
 
                     // Look for HTTP request
                     iStartPos = sBuffer.IndexOf("HTTP", 1);
@@ -315,12 +364,9 @@ namespace WindowsFormsApplication1
 
                     // Get the HTTP text and version e.g. it will return "HTTP/1.1"
                     string sHttpVersion = sBuffer.Substring(iStartPos, 8);
-                    log("Got HTTPVersion: " + sHttpVersion);
-
 
                     // Extract the Requested Type and Requested file/directory
                     sRequest = sBuffer.Substring(0, iStartPos - 1);
-                    log("Got Request Type: " + sRequest);
 
                     //Replace backslash with Forward Slash, if Any
                     sRequest.Replace("\\", "/");
@@ -338,9 +384,30 @@ namespace WindowsFormsApplication1
                     sRequestedFile = sRequest.Substring(iStartPos);
                     log("Requested File: " + sRequestedFile);
 
+                    // do something fancy if the requested file is important
+                    if (sRequestedFile.Equals("login.dpi"))
+                    {
+                        if (parse_login(postpairs)) sRequestedFile = "choose.dpi";
+                    }
+                    if (sRequestedFile.Equals("display.dpi"))
+                    {
+                        if (postpairs["screen"].Equals("true")) sRequestedFile = "screen.dpi";
+                        if (postpairs["left"].Equals("true")) sRequestedFile = "left.dpi";
+                        if (postpairs["head"].Equals("true")) sRequestedFile = "head.dpi";
+                        if (postpairs["right"].Equals("true")) sRequestedFile = "right.dpi";
+                        log(sRequestedFile.Substring(0, sRequestedFile.Length-4) + " has joined");
+                    }
+                    if (sRequestedFile.Equals("judge.dpi"))
+                    {
+                        sRequestedFile = calculate_result(postpairs);
+                    }
+                    if (sRequestedFile.Equals("screen.dpi"))
+                    {
+                        postpairs = show_results();
+                    }
+
                     //Extract The directory Name
                     sDirName = sRequest.Substring(sRequest.IndexOf("/"), sRequest.LastIndexOf("/") - headlength);
-                    log("Directory Name: " + sDirName);
 
                     /////////////////////////////////////////////////////////////////////
                     // Identify the Physical Directory
@@ -352,8 +419,6 @@ namespace WindowsFormsApplication1
                         //Get the Virtual Directory
                         sLocalDir = GetLocalPath(sMyWebServerRoot, sDirName);
                     }
-
-                    log("Directory Requested : " + sLocalDir);
 
                     //If the physical directory does not exists then
                     // dispaly the error message
@@ -413,9 +478,6 @@ namespace WindowsFormsApplication1
                         sErrorMessage = "<H2>404 Error! File Does Not Exists...</H2>";
                         SendHeader(sHttpVersion, "", sErrorMessage.Length, " 404 Not Found", ref mySocket);
                         SendToBrowser(sErrorMessage, ref mySocket);
-
-                        log(sFormattedMessage);
-                        Console.WriteLine(sFormattedMessage);
                     }
                     else
                     {
@@ -442,14 +504,14 @@ namespace WindowsFormsApplication1
                         fs.Close();
 
                         // parse the file if post
-                        if (headlength == 4)
+                        if (headlength == post)
                         {
-                            string body = Encoding.ASCII.GetString(bytes, 0, bytes.Length);
-                            foreach (KeyValuePair<string, string> kvp in postpairs) if (kvp.Value.Length > 0) body = body.Replace("&" + kvp.Key, kvp.Value);
+                            string body = sResponse;
+                            foreach (KeyValuePair<string, string> kvp in postpairs) if (kvp.Value.Length > 0) body = body.Replace("#" + kvp.Key + "#", kvp.Value);
                             byte[] newbytes = new byte[body.Length * sizeof(char)];
-                            System.Buffer.BlockCopy(body.ToCharArray(), 0, newbytes, 0, newbytes.Length);
+                            newbytes = Encoding.ASCII.GetBytes(body);
                             bytes = newbytes;
-                            iTotBytes = bytes.Length;
+                            iTotBytes = newbytes.Length;
                         }
 
                         SendHeader(sHttpVersion, sMimeType, iTotBytes, " 200 OK", ref mySocket);
@@ -461,15 +523,34 @@ namespace WindowsFormsApplication1
             }
         }
 
+        private IPAddress LocalIPAddress()
+        {
+            if (!System.Net.NetworkInformation.NetworkInterface.GetIsNetworkAvailable())
+            {
+                return null;
+            }
+
+            IPHostEntry host = Dns.GetHostEntry(Dns.GetHostName());
+
+            return host
+                .AddressList
+                .FirstOrDefault(ip => ip.AddressFamily == AddressFamily.InterNetwork);
+        }
+
         private void button1_Click(object sender, EventArgs e)
         {
                 try
                 {
-                //start listing on the given port
-                IPAddress.TryParse("127.0.0.1", out localaddr);
+                //start listing on the given port on the local machine
+                localaddr = LocalIPAddress();
+                if (localaddr == null)
+                {
+                    log("Not connected to a network");
+                    return;
+                }
                 myListener = new TcpListener(localaddr, port);
                 myListener.Start();
-                log("Web Server Running... Press STOP to Cancel...");
+                log("Web Server Running at http://"+localaddr.ToString()+":"+port.ToString()+" Press STOP to Cancel...");
                 button2.Show();
 
                 //start the thread which calls the method 'StartListen'
@@ -479,8 +560,7 @@ namespace WindowsFormsApplication1
                 }
                 catch (Exception ex)
                 {
-                log("FAILED to open listener...");
-                Console.WriteLine("An Exception Occurred while Listening :" + ex.ToString());
+                log("FAILED to open listener : " + ex.ToString());
                 }
         }
 
@@ -496,6 +576,32 @@ namespace WindowsFormsApplication1
                 Console.WriteLine("An Exception Occurred while aborting :" + ex.ToString());
             }
             button2.Hide();
+        }
+
+        private void button3_Click(object sender, EventArgs e)
+        {
+            OpenFileDialog fdlg = new OpenFileDialog();
+            fdlg.Title = "Select Next Lifter Spreadsheet";
+            fdlg.InitialDirectory = @"c:\";
+            fdlg.Filter = "All files (*.*)|*.*|All files (*.*)|*.*";
+            fdlg.FilterIndex = 2;
+            fdlg.RestoreDirectory = true;
+            if (fdlg.ShowDialog() == DialogResult.OK)
+            {
+                string spreadsheet = fdlg.FileName;
+                if (File.Exists(spreadsheetfile)) File.Delete(spreadsheetfile);
+                System.IO.File.WriteAllText(spreadsheetfile, spreadsheet);
+                log("Selected " + spreadsheet);
+            }
+        }
+
+        private void buttonSetPassword_Click(object sender, EventArgs e)
+        {
+            string password;
+            password = textPassword.Text;
+            if (File.Exists(passwordfile)) File.Delete(passwordfile);
+            System.IO.File.WriteAllText(passwordfile, password);
+            log("Password set to " + password);
         }
     }
 }
