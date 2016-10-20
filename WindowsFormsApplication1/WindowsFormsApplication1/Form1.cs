@@ -1,16 +1,13 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
-using System.Drawing;
 using System.Linq;
 using System.Text;
-using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
+using Microsoft.Office.Interop.Excel;
 
 namespace WindowsFormsApplication1
 {
@@ -23,17 +20,13 @@ namespace WindowsFormsApplication1
         string spreadsheetfile = "data\\Spreadsheet.Dat";
         string passwordfile = "data\\Password.Dat";
         int results = 0;
-        public const int blank = 0;
-        public const int good = 1;
-        public const int bad = 2;
-        int[] result = { blank, blank, blank };
-        public const int left = 0;
-        public const int head = 1;
-        public const int right = 2;
-        public const int post = 4;
-        public const int get = 3;
-
+        Dictionary<string, string> result = new Dictionary<string, string>();
+        const int post = 4;
+        const int get = 3;
         delegate void SetTextCallback(string text);
+        Microsoft.Office.Interop.Excel.Application excelApp = null;
+        Workbooks wkbks = null;
+        Workbook wkbk = null;
 
         public Form1()
         {
@@ -210,13 +203,7 @@ namespace WindowsFormsApplication1
             {
                 if (mySocket.Connected)
                 {
-                    if ((numBytes = mySocket.Send(bSendData,
-                          bSendData.Length, 0)) == -1)
-                        log("Socket Error cannot Send Packet");
-                    else
-                    {
-                        log("No. of bytes sent (Body): " + numBytes);
-                    }
+                    if ((numBytes = mySocket.Send(bSendData, bSendData.Length, 0)) == -1) log("Socket Error cannot Send Packet");
                 }
                 else
                     log("Connection Dropped....");
@@ -264,34 +251,93 @@ namespace WindowsFormsApplication1
 
         string calculate_result(Dictionary<string, string> postpairs)
         {
-            string position = "";
-            if (postpairs["good"].Length > 0)
+            string position;
+            position = postpairs.ElementAt(postpairs.Count - 2).Key;
+            log("got a result from " + position);
+            if (!result.ContainsKey(position))
             {
-                position = postpairs["good"];
-                if (position.Equals("left")) result[left] = good;
-                if (position.Equals("head")) result[head] = good;
-                if (position.Equals("right")) result[right] = good;
-                results++;
-            }
-            if (postpairs["bad"].Length > 0)
-            {
-                position = postpairs["bad"];
-                if (position.Equals("left")) result[left] = bad;
-                if (position.Equals("head")) result[head] = bad;
-                if (position.Equals("right")) result[right] = bad;
+                result[position] = postpairs[position];
                 results++;
             }
             return position + ".dpi";
         }
 
+        void get_spreadsheet()
+        {
+            string spreadsheet;
+            if (File.Exists(spreadsheetfile)) spreadsheet = System.IO.File.ReadAllText(spreadsheetfile);
+            else { log("Spreadsheet not selected"); return; }
+
+            bool wasFoundRunning = false;
+
+            Microsoft.Office.Interop.Excel.Application tApp = null;
+            //Checks to see if excel is opened
+            try
+            {
+                tApp = (Microsoft.Office.Interop.Excel.Application)System.Runtime.InteropServices.Marshal.GetActiveObject("Excel.Application");
+                wasFoundRunning = true;
+            }
+            catch (Exception)//Excel not open
+            {
+                wasFoundRunning = false;
+                log("Excel not open");
+                return;
+            }
+            finally
+            {
+                if (true == wasFoundRunning)
+                {
+                    excelApp = tApp;
+                    log("Excel was running... Using active spreadsheet");
+                    wkbk = excelApp.ActiveWorkbook;
+                }
+                else
+                {
+                    log("Excel was not running... Opening spreadsheet");
+                    excelApp = new Microsoft.Office.Interop.Excel.Application();
+                    wkbks = excelApp.Workbooks;
+                    wkbk = wkbks.Open(spreadsheet);
+                }
+                //Release the temp if in use
+                //if (null != tApp) { System.Runtime.InteropServices.Marshal.FinalReleaseComObject(tApp); }
+                //tApp = null;
+            }
+
+        }
+
+        void press_button(int i)
+        {
+            string macro = null;
+            if (excelApp == null)
+            {
+                log("Cannot access workbook");
+                return;
+            }
+            if (i > 1) macro = "Good"; else macro = "NoLift";
+            try
+            {
+                excelApp.Run(macro);
+            }
+            catch (Exception e)
+            {
+                log("Can't run " + macro + " because: " + e.ToString());
+            }
+        }
+
         Dictionary<string, string> show_results()
         {
             Dictionary<string, string> screen = new Dictionary<string, string>();
+            int i = 0;
             if (results == 3)
             {
-                if (result[left] == good) screen.Add("left", "good"); else screen.Add("left", "bad");
-                if (result[head] == good) screen.Add("head", "good"); else screen.Add("head", "bad");
-                if (result[right] == good) screen.Add("right", "good"); else screen.Add("right", "bad");
+                foreach (KeyValuePair<string, string> kvp in result)
+                {
+                    screen.Add(kvp.Key, kvp.Value);
+                    if (kvp.Value.Equals("good")) i++;
+                }
+                press_button(i);
+                result.Clear();
+                results = 0;
                 return screen;
             }
             screen.Add("left", "blank");
@@ -313,6 +359,7 @@ namespace WindowsFormsApplication1
             String sPhysicalFilePath = "";
             String sResponse = "";
 
+            get_spreadsheet();
 
             while (true)
             {
@@ -324,7 +371,7 @@ namespace WindowsFormsApplication1
 
                     //make a byte array and receive data from the client 
                     Byte[] bReceive = new Byte[1024];
-                    int i = mySocket.Receive(bReceive, bReceive.Length, 0);
+                    int i = mySocket.Receive(bReceive, bReceive.Length, SocketFlags.None);
                     int headlength;
                     Dictionary<string, string> postpairs = new Dictionary<string, string>();
                             
@@ -334,14 +381,14 @@ namespace WindowsFormsApplication1
                     //At present we will only deal with GET type
                     if (sBuffer.Substring(0, 3) != "GET" && sBuffer.Substring(0, 4) != "POST")
                     {
-                        log("Only Get and Post Method is supported..");
+                        log("Only Get and Post Method is supported, instead I got this:");
+                        log(sBuffer);
                         mySocket.Close();
                         return;
                     }
 
                     if (sBuffer.Substring(0, 4) == "POST")
                     {
-                        log("\nGOT A POST\n");
                         headlength = post;
 
                         // create dictionary of POST pairs
@@ -382,7 +429,9 @@ namespace WindowsFormsApplication1
                     //Extract the requested file name
                     iStartPos = sRequest.LastIndexOf("/") + 1;
                     sRequestedFile = sRequest.Substring(iStartPos);
-                    log("Requested File: " + sRequestedFile);
+
+                    //Extract The directory Name
+                    sDirName = sRequest.Substring(sRequest.IndexOf("/"), sRequest.LastIndexOf("/") - headlength);
 
                     // do something fancy if the requested file is important
                     if (sRequestedFile.Equals("login.dpi"))
@@ -391,11 +440,8 @@ namespace WindowsFormsApplication1
                     }
                     if (sRequestedFile.Equals("display.dpi"))
                     {
-                        if (postpairs["screen"].Equals("true")) sRequestedFile = "screen.dpi";
-                        if (postpairs["left"].Equals("true")) sRequestedFile = "left.dpi";
-                        if (postpairs["head"].Equals("true")) sRequestedFile = "head.dpi";
-                        if (postpairs["right"].Equals("true")) sRequestedFile = "right.dpi";
-                        log(sRequestedFile.Substring(0, sRequestedFile.Length-4) + " has joined");
+                        sRequestedFile = postpairs["choice"] + ".dpi";
+                        log(postpairs["choice"] + " has joined");
                     }
                     if (sRequestedFile.Equals("judge.dpi"))
                     {
@@ -404,10 +450,9 @@ namespace WindowsFormsApplication1
                     if (sRequestedFile.Equals("screen.dpi"))
                     {
                         postpairs = show_results();
+                        headlength = post;
                     }
 
-                    //Extract The directory Name
-                    sDirName = sRequest.Substring(sRequest.IndexOf("/"), sRequest.LastIndexOf("/") - headlength);
 
                     /////////////////////////////////////////////////////////////////////
                     // Identify the Physical Directory
@@ -470,7 +515,6 @@ namespace WindowsFormsApplication1
 
                     //Build the physical path
                     sPhysicalFilePath = sLocalDir + sRequestedFile;
-                    Console.WriteLine("File Requested : " + sPhysicalFilePath);
 
                     if (File.Exists(sPhysicalFilePath) == false)
                     {
